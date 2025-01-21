@@ -6,12 +6,14 @@ import (
 	"net/http"
 
 	"github.com/gorilla/mux"
+	"github.com/ponty96/simple-web-app/internal/controllers"
 	log "github.com/sirupsen/logrus"
 )
 
 type Config struct {
-	Host string
-	Port int
+	Host        string
+	Port        int
+	Controllers *controllers.Controller
 }
 
 type Response struct {
