@@ -1,65 +1,25 @@
 package server
 
 import (
+	"context"
 	"encoding/json"
 	"io"
 	"log"
 	"net/http"
+	"time"
 
 	"github.com/pkg/errors"
-)
-
-type Timestamp struct {
-	Seconds int64 `json:"seconds"`
-	Nanos   int32 `json:"nanos"`
-}
-
-// Represents the main order structure
-type Order struct {
-	OrderID         *string      `json:"order_id"`
-	UserID          *string      `json:"user_id"`
-	Items           []OrderItem  `json:"items"`
-	ShippingAddress Address      `json:"shipping_address"`
-	BillingAddress  Address      `json:"billing_address"`
-	TotalAmount     *float64     `json:"total_amount"`
-	Status          *OrderStatus `json:"status"`
-	CreatedAt       Timestamp    `json:"created_at"`
-	UpdatedAt       Timestamp    `json:"updated_at"`
-}
-
-// Represents a single item within an order
-type OrderItem struct {
-	ProductID  string  `json:"product_id"`
-	Quantity   int32   `json:"quantity"`
-	Price      float64 `json:"price"`
-	TotalPrice float64 `json:"total_price"`
-}
-
-// Represents an address used for shipping or billing
-type Address struct {
-	Line1      string `json:"line1"`
-	Line2      string `json:"line2"`
-	City       string `json:"city"`
-	State      string `json:"state"`
-	PostalCode string `json:"postal_code"`
-	Country    string `json:"country"`
-}
-
-// Status of the order
-type OrderStatus string
-
-const (
-	OrderStatusUnspecified OrderStatus = "ORDER_STATUS_UNSPECIFIED"
-	OrderStatusPending     OrderStatus = "PENDING"
-	OrderStatusShipped     OrderStatus = "SHIPPED"
-	OrderStatusDelivered   OrderStatus = "DELIVERED"
-	OrderStatusCancelled   OrderStatus = "CANCELLED"
+	"github.com/ponty96/simple-web-app/internal/orders"
 )
 
 func (s *server) orderWebhookHandler(w http.ResponseWriter, r *http.Request) {
 	// read the request payload which should be a json
 	// validate required fields
+	ctx, cancel := context.WithTimeout(r.Context(), 8*time.Second) // maximum timeout of the webhook provider to wait for a response
+	defer cancel()
+
 	body, err := io.ReadAll(r.Body)
+
 	if err != nil {
 		err := errors.Wrap(err, "failed to read request")
 		log.Print(err)
@@ -67,9 +27,10 @@ func (s *server) orderWebhookHandler(w http.ResponseWriter, r *http.Request) {
 			Message: "",
 			Code:    http.StatusInternalServerError,
 		})
+		return
 	}
 
-	var order Order
+	var order orders.Order
 
 	err = json.Unmarshal(body, &order)
 
@@ -80,6 +41,7 @@ func (s *server) orderWebhookHandler(w http.ResponseWriter, r *http.Request) {
 			Message: "invalid json",
 			Code:    http.StatusUnprocessableEntity,
 		})
+		return
 	}
 
 	v := make(map[string]string)
@@ -104,10 +66,18 @@ func (s *server) orderWebhookHandler(w http.ResponseWriter, r *http.Request) {
 			Code:    http.StatusUnprocessableEntity,
 			Errs:    v,
 		})
+		return
 	}
 
-	httpWriteJSON(w, Response{
-		Message: "Order Created",
-		Code:    http.StatusCreated,
-	})
+	if err = s.Config.Processor.NewOrder(ctx, &order); err != nil {
+		httpWriteJSON(w, Response{
+			Message: "failed to process order",
+			Code:    http.StatusInternalServerError,
+		})
+	} else {
+		httpWriteJSON(w, Response{
+			Message: "Order Created",
+			Code:    http.StatusCreated,
+		})
+	}
 }

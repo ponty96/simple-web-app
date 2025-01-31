@@ -2,12 +2,27 @@ package server
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
+
+	"github.com/ponty96/simple-web-app/internal/orders"
 )
+
+// ---- processor.Processor Mock for Testing --- //
+type ProcessorMock struct {
+	newOrder *orders.Order
+}
+
+func (c *ProcessorMock) NewOrder(ctx context.Context, order *orders.Order) error {
+	c.newOrder = order
+	return nil
+}
+
+// --- End of processor.Processor Mock ---- //
 
 func Test_OrderWebhookBadRequest(t *testing.T) {
 	cfg := &Config{
@@ -89,9 +104,11 @@ func Test_OrderWebhookRequiredFields(t *testing.T) {
 }
 
 func Test_OrderWebhookSuccessRequest(t *testing.T) {
+	p := &ProcessorMock{}
 	cfg := &Config{
-		Host: "localhost",
-		Port: 4050,
+		Host:      "localhost",
+		Port:      4050,
+		Processor: p,
 	}
 
 	s := NewHTTP(cfg)
@@ -152,5 +169,9 @@ func Test_OrderWebhookSuccessRequest(t *testing.T) {
 
 	if r.Code != http.StatusCreated {
 		t.Errorf("Expected %d, got %d", http.StatusCreated, r.Code)
+	}
+
+	if *p.newOrder.OrderID != "test-123" {
+		t.Error("failed to call processor")
 	}
 }

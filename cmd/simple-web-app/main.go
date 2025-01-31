@@ -7,7 +7,8 @@ import (
 
 	"github.com/jackc/pgx/v5"
 	"github.com/kelseyhightower/envconfig"
-	"github.com/ponty96/simple-web-app/internal/controllers"
+	"github.com/ponty96/simple-web-app/internal/orders"
+	"github.com/ponty96/simple-web-app/internal/rabbitmq"
 	"github.com/ponty96/simple-web-app/internal/server"
 	log "github.com/sirupsen/logrus"
 )
@@ -46,12 +47,17 @@ func main() {
 	}
 	defer conn.Close(context.Background())
 
-	c := controllers.NewController(conn)
+	r := rabbitmq.NewRabbitMQ(rabbitmq.Config{
+		URL: "amqp://guest:guest@localhost:5672/",
+	})
+
+	defer r.Close()
+	p := orders.NewProcessor(conn, r)
 
 	sCfg := server.Config{
-		Host:        config.ListenHost,
-		Port:        config.ListenPort,
-		Controllers: c,
+		Host:      config.ListenHost,
+		Port:      config.ListenPort,
+		Processor: p,
 	}
 	s := server.NewHTTP(&sCfg)
 
