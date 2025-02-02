@@ -1,12 +1,5 @@
 -- 1. Create a custom enum type for order status
-DO $$
-BEGIN
-    IF NOT EXISTS (SELECT 1 FROM pg_type WHERE typname = 'order_status') THEN
-        CREATE TYPE order_status AS ENUM ('pending', 'shipped', 'delivered', 'cancelled');
-    END IF;
-END
-$$;
-
+CREATE TYPE order_status AS ENUM ('pending', 'shipped', 'delivered', 'cancelled');
 
 -- 2. Create an addresses table
 CREATE TABLE addresses (

@@ -2,32 +2,35 @@ package orders
 
 import (
 	"context"
+	"fmt"
 	"time"
 
 	"github.com/jackc/pgx/v5"
-	"github.com/sirupsen/logrus"
+	"github.com/jackc/pgx/v5/pgtype"
+	"github.com/pkg/errors"
+	"google.golang.org/protobuf/proto"
+
+	log "github.com/sirupsen/logrus"
 
 	"github.com/ponty96/my-proto-schemas/output/schemas"
 	"github.com/ponty96/simple-web-app/internal/db"
-	"github.com/ponty96/simple-web-app/internal/rabbitmq"
 )
 
 type Processor interface {
-	NewOrder(context.Context, *Order) error
+	NewOrder(context.Context, proto.Message) error
 }
 
 type processor struct {
-	db        *pgx.Conn
-	queries   *db.Queries
-	publisher rabbitmq.MQ
+	db      *pgx.Conn
+	queries *db.Queries
+	// publisher rabbitmq.MQ
 }
 
-func NewProcessor(d *pgx.Conn, r rabbitmq.MQ) Processor {
+func NewProcessor(d *pgx.Conn) *processor {
 	client := db.New(d)
 	return &processor{
-		db:        d,
-		queries:   client,
-		publisher: r,
+		db:      d,
+		queries: client,
 	}
 }
 
@@ -59,42 +62,98 @@ type Address struct {
 	Country    string `json:"country"`
 }
 
-func (c *processor) NewOrder(ctx context.Context, order *Order) error {
+func (c *processor) NewOrder(ctx context.Context, msg proto.Message) error {
 	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()
 
-	var items []*schemas.OrderItem
+	o, ok := msg.(*schemas.Order)
 
-	for _, i := range order.Items {
-		it := i
-		items = append(items, &schemas.OrderItem{
-			Price:      it.Price,
-			ProductId:  it.ProductID,
-			Quantity:   it.Quantity,
-			TotalPrice: it.TotalPrice,
+	if !ok {
+		return fmt.Errorf("unexpected message type: %T", msg)
+	}
+
+	var shippingAddressID pgtype.UUID = pgtype.UUID{Valid: false}
+	var billingAddressID pgtype.UUID = pgtype.UUID{Valid: false}
+
+	if o.ShippingAddress != nil && o.ShippingAddress.Street != "" {
+		sAdd, err := c.queries.CreateAddress(ctx, &db.CreateAddressParams{
+			Line1:   o.ShippingAddress.Street,
+			State:   o.ShippingAddress.State,
+			City:    o.ShippingAddress.City,
+			Country: "GB",
 		})
+		if err != nil {
+			return errors.Wrap(err, "failed to insert shipping address")
+		}
+
+		shippingAddressID = sAdd.ID
 	}
 
-	o := schemas.Order{
-		OrderId: *order.OrderID,
-		UserId:  *order.UserID,
-		Items:   items,
-		// Status:  *order.Status,
-		TotalAmount: *order.TotalAmount,
-		ShippingAddress: &schemas.Address{
-			City:  order.ShippingAddress.City,
-			State: order.ShippingAddress.State,
-		},
-		BillingAddress: &schemas.Address{
-			City:  order.BillingAddress.City,
-			State: order.BillingAddress.State,
-		},
+	if o.BillingAddress != nil && o.BillingAddress.Street != "" {
+		bAdd, err := c.queries.CreateAddress(ctx, &db.CreateAddressParams{
+			Line1:   o.BillingAddress.Street,
+			State:   o.BillingAddress.State,
+			City:    o.BillingAddress.City,
+			Country: "GB",
+		})
+		if err != nil {
+			return errors.Wrap(err, "failed to insert billing address")
+		}
+		billingAddressID = bAdd.ID
 	}
-	// convert
-	if err := c.publisher.Publish(ctx, &o); err != nil {
-		// we need to log an error here.
-		logrus.Errorf("Failed to publish: %v", err)
-		return err
+
+	var userUUID pgtype.UUID
+	if err := userUUID.Scan(o.UserId); err != nil {
+		return errors.Wrap(err, "failed to parse UUID")
 	}
+
+	var totalAmount pgtype.Numeric
+	if err := totalAmount.Scan(fmt.Sprintf("%.2f", o.TotalAmount)); err != nil {
+		return errors.Wrap(err, "failed to convert total amount to numeric")
+	}
+
+	insertedOrder, err := c.queries.CreateOrder(ctx, &db.CreateOrderParams{
+		ShippingAddressID: shippingAddressID,
+		BillingAddressID:  billingAddressID,
+		UserID:            userUUID,
+		Status:            db.OrderStatus(o.OrderStatus),
+		TotalAmount:       totalAmount,
+	})
+
+	if err != nil {
+		return errors.Wrap(err, "failed to create order")
+	}
+
+	for _, item := range o.GetItems() {
+		var p pgtype.Numeric
+		if err := p.Scan(fmt.Sprintf("%.2f", item.Price)); err != nil {
+			return errors.Wrap(err, "failed to convert price to numeric")
+		}
+
+		var tP pgtype.Numeric
+		if err := tP.Scan(fmt.Sprintf("%.2f", item.TotalPrice)); err != nil {
+			return errors.Wrap(err, "failed to convert total price to numeric")
+		}
+
+		var productUUID pgtype.UUID
+		if err := productUUID.Scan(item.ProductId); err != nil {
+			return errors.Wrap(err, "failed to parse UUID")
+		}
+
+		_, err := c.queries.CreateOrderItem(ctx, &db.CreateOrderItemParams{
+			OrderID:    insertedOrder.ID,
+			Price:      p,
+			Quantity:   item.Quantity,
+			TotalPrice: tP,
+			ProductID:  productUUID,
+		})
+
+		if err != nil {
+			return errors.Wrap(err, "failed to create order item")
+		}
+	}
+
+	log.Print("Successfully created an order")
+
 	return nil
 }

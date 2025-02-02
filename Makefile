@@ -5,7 +5,7 @@ PGUSER ?= postgres
 PGPASS ?= postgres
 PGHOST ?= 127.0.0.1
 PGPORT ?= 5432
-PGDB ?= simple-web-app-test
+PGDB ?= simple-web-app
 
 DB_URL ?= "postgres://$(PGUSER):$(PGPASS)@$(PGHOST)/$(PGDB)?sslmode=disable"
 

@@ -11,3 +11,4 @@ sql:
         emit_result_struct_pointers: true
         emit_params_struct_pointers: true
         emit_empty_slices: true
+        emit_enum_valid_method: true

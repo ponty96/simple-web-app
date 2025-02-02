@@ -7,6 +7,7 @@ import (
 
 	"github.com/jackc/pgx/v5"
 	"github.com/kelseyhightower/envconfig"
+	"github.com/ponty96/my-proto-schemas/output/schemas"
 	"github.com/ponty96/simple-web-app/internal/orders"
 	"github.com/ponty96/simple-web-app/internal/rabbitmq"
 	"github.com/ponty96/simple-web-app/internal/server"
@@ -40,26 +41,28 @@ func main() {
 		log.Warnf("DATABASE_URL not provided; using default %s", dbURL)
 	}
 
-	conn, err := pgx.Connect(context.Background(), dbURL)
+	ctx := context.Background()
+	conn, err := pgx.Connect(ctx, dbURL)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Unable to connect to database: %v\n", err)
 		os.Exit(1)
 	}
-	defer conn.Close(context.Background())
+	defer conn.Close(ctx)
 
 	r := rabbitmq.NewRabbitMQ(rabbitmq.Config{
 		URL: "amqp://guest:guest@localhost:5672/",
 	})
 
 	defer r.Close()
-	p := orders.NewProcessor(conn, r)
+	p := orders.NewProcessor(conn)
+
+	r.Consume(ctx, &schemas.Order{}, p.NewOrder)
 
 	sCfg := server.Config{
-		Host:      config.ListenHost,
-		Port:      config.ListenPort,
-		Processor: p,
+		Host: config.ListenHost,
+		Port: config.ListenPort,
+		MQ:   r,
 	}
 	s := server.NewHTTP(&sCfg)
-
 	s.Serve()
 }

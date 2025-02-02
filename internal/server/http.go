@@ -6,14 +6,14 @@ import (
 	"net/http"
 
 	"github.com/gorilla/mux"
-	"github.com/ponty96/simple-web-app/internal/orders"
+	"github.com/ponty96/simple-web-app/internal/rabbitmq"
 	log "github.com/sirupsen/logrus"
 )
 
 type Config struct {
-	Host      string
-	Port      int
-	Processor orders.Processor
+	Host string
+	Port int
+	MQ   rabbitmq.MQ
 }
 
 type Response struct {

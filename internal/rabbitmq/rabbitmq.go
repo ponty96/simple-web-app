@@ -3,6 +3,7 @@ package rabbitmq
 import (
 	"context"
 	"fmt"
+	"time"
 
 	"github.com/pkg/errors"
 	"github.com/ponty96/my-proto-schemas/output/schemas"
@@ -11,6 +12,8 @@ import (
 
 	amqp "github.com/rabbitmq/amqp091-go"
 )
+
+var ErrRetryable = errors.New("retryable error")
 
 type MQ interface {
 	Close() error
@@ -23,7 +26,7 @@ type Config struct {
 }
 
 // TODO: Consider reconnection logic and multiple connections.
-func NewRabbitMQ(cfg Config) MQ {
+func NewRabbitMQ(cfg Config) *RabbitMQ {
 	conn, err := amqp.Dial(cfg.URL)
 	failOnError(err, "Failed to connect to RabbitMQ")
 
@@ -35,6 +38,7 @@ func NewRabbitMQ(cfg Config) MQ {
 type RabbitMQ struct {
 	// consider a different connect for publisher and consumer
 	conn *amqp.Connection
+	done chan struct{}
 }
 
 func (e *RabbitMQ) Close() error {
@@ -74,7 +78,7 @@ func (r *RabbitMQ) Publish(ctx context.Context, o proto.Message) error {
 
 	ch, err := r.conn.Channel()
 	if err != nil {
-		return errors.Wrap(err, "failed to open a channel")
+		return errors.Wrap(err, "publish: failed to open a channel")
 	}
 	defer ch.Close()
 
@@ -87,7 +91,7 @@ func (r *RabbitMQ) Publish(ctx context.Context, o proto.Message) error {
 		false,         // no-wait
 		nil,           // arguments
 	); err != nil {
-		return errors.Wrap(err, "failed to declare an exchange")
+		return errors.Wrap(err, "publish: failed to declare an exchange")
 	}
 
 	b, err := proto.Marshal(o)
@@ -107,5 +111,93 @@ func (r *RabbitMQ) Publish(ctx context.Context, o proto.Message) error {
 		}); err != nil {
 		return errors.Wrap(err, "failed to publish order")
 	}
+	return nil
+}
+
+func (r *RabbitMQ) Consume(ctx context.Context, in proto.Message, f func(ctx context.Context, o proto.Message) error) error {
+	m := r.GetMessageMeta(in)
+
+	ch, err := r.conn.Channel()
+	if err != nil {
+		return errors.Wrap(err, "consume: failed to open a channel")
+	}
+
+	q, err := ch.QueueDeclare(
+		m.msgType, // name
+		true,      // durable
+		false,     // delete when unused
+		false,     // exclusive
+		false,     // no-wait
+		nil,       // arguments
+	)
+
+	if err != nil {
+		return errors.Wrap(err, "consume: failed to declare a queue")
+	}
+
+	err = ch.QueueBind(
+		q.Name,          // queue name
+		m.msgRoutingKey, // routing key
+		m.msgExchange,   // exchange
+		false,
+		nil,
+	)
+
+	if err != nil {
+		return errors.Wrap(err, "consume: failed to bind queue")
+	}
+
+	msgs, err := ch.Consume(
+		q.Name, // queue
+		"",     // consumer
+		false,  // auto-ack
+		false,  // exclusive
+		false,  // no-local
+		false,  // no-wait
+		nil,    // args
+	)
+
+	if err != nil {
+		return errors.Wrap(err, "consume: failed to register a consumer")
+	}
+
+	go func() {
+		defer ch.Close()
+
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-r.done:
+				return
+			case d, ok := <-msgs:
+				if !ok {
+					log.Print("I got NO message from the consumer")
+					return
+				}
+				log.Print("I got a message from the consumer")
+				event := proto.Clone(in)
+
+				if err := proto.Unmarshal(d.Body, event); err != nil {
+					log.Errorf("failed to decode %+v with err %s", d.Body, err)
+				}
+				ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
+				defer cancel()
+
+				if err := f(ctx, event); err != nil {
+					log.Errorf("EventConsumer: %s", err)
+					// Decide whether to requeue based on error type
+					if errors.Is(err, ErrRetryable) {
+						d.Nack(false, true) // requeue
+					} else {
+						d.Nack(false, false) // don't requeue
+					}
+				}
+
+				d.Ack(false)
+			}
+		}
+	}()
+
 	return nil
 }

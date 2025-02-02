@@ -7,13 +7,12 @@ package orders
 
 import (
 	"context"
-	"log"
 	"testing"
 
 	"github.com/jackc/pgx/v5"
-	"github.com/pkg/errors"
+	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/ponty96/my-proto-schemas/output/schemas"
-	"google.golang.org/protobuf/proto"
+	"github.com/ponty96/simple-web-app/internal/db"
 )
 
 func SetupTestDb(t *testing.T) *pgx.Conn {
@@ -26,94 +25,87 @@ func SetupTestDb(t *testing.T) *pgx.Conn {
 	return conn
 }
 
-// ---- rabbitmq.MQ Mock for Testing --- //
-type MQMock struct {
-	PublishedEvent []byte
-	Closed         string
-}
-
-func (m *MQMock) Close() error {
-	m.Closed = "closed"
-	return nil
-}
-
-func (m *MQMock) Publish(ctx context.Context, o proto.Message) error {
-	b, err := proto.Marshal(o)
-
-	if err != nil {
-		log.Panicf("failed to encode %s", err)
-		return errors.Wrap(err, "failed to encode order proto")
-	}
-	m.PublishedEvent = b
-	return nil
-}
-
-// --- End of rabbitmq.MQ Mock ---- //
-
-func Test_NewOrderPublishSuccess(t *testing.T) {
+func Test_NewOrder(t *testing.T) {
 	conn := SetupTestDb(t)
 	ctx := context.Background()
 	defer conn.Close(ctx)
 
-	mockMQ := &MQMock{}
-	defer mockMQ.Close()
+	p := NewProcessor(conn)
 
-	processer := NewProcessor(conn, mockMQ)
+	// prepare test by deleting records
+	p.queries.DeleteOrderItems(ctx)
+	p.queries.DeleteOrders(ctx)
 
-	sampleOrder := Order{
-		OrderID:     stringPtr("ORD123456"),
-		UserID:      stringPtr("USR789012"),
-		TotalAmount: float64Ptr(159.97),
-		Status:      stringPtr("PENDING"),
-		Items: []OrderItem{
-			{
-				ProductID:  "PROD001",
-				Quantity:   2,
-				Price:      49.99,
-				TotalPrice: 99.98,
-			},
-			{
-				ProductID:  "PROD002",
-				Quantity:   1,
-				Price:      59.99,
-				TotalPrice: 59.99,
-			},
-		},
-		ShippingAddress: Address{
-			Line1:      "123 Main Street",
-			City:       "New York",
-			State:      "NY",
-			PostalCode: "10001",
-			Country:    "USA",
-		},
-		BillingAddress: Address{
-			Line1:      "123 Main Street",
-			City:       "New York",
-			State:      "NY",
-			PostalCode: "10001",
-			Country:    "USA",
+	// orderId := pgtype.UUID{Bytes: [16]byte{1}, Valid: true}
+	userId := pgtype.UUID{Bytes: [16]byte{2}, Valid: true}
+	productId := pgtype.UUID{Bytes: [16]byte{3}, Valid: true}
+
+	items := []*schemas.OrderItem{
+		{
+			Price:      10.99,
+			ProductId:  productId.String(),
+			Quantity:   2,
+			TotalPrice: 21.98,
 		},
 	}
 
-	processer.NewOrder(ctx, &sampleOrder)
-
-	orderEvent := &schemas.Order{}
-
-	if mockMQ.PublishedEvent == nil {
-		t.Error("Failed to Publish New Order")
+	o := schemas.Order{
+		UserId:      userId.String(),
+		Items:       items,
+		OrderStatus: "pending",
+		TotalAmount: 21.98,
+		ShippingAddress: &schemas.Address{
+			City:   "New York",
+			State:  "NY",
+			Street: "123 Main St",
+		},
+		BillingAddress: &schemas.Address{
+			City:   "New York",
+			State:  "NY",
+			Street: "123 Main St",
+		},
 	}
 
-	if err := proto.Unmarshal(mockMQ.PublishedEvent, orderEvent); err != nil {
-		t.Errorf("failed to decode %s", err)
+	if err := p.NewOrder(ctx, &o); err != nil {
+		t.Errorf("Expected successfully created order %s", err)
 	}
 
-}
+	orders, err := p.queries.ListOrders(ctx, userId)
 
-// Helper functions for pointer types
-func stringPtr(s string) *string {
-	return &s
-}
+	if err != nil {
+		t.Errorf("Expected a list of orders %s", err)
+	}
 
-func float64Ptr(f float64) *float64 {
-	return &f
+	mo := orders[0]
+
+	if mo.UserID != userId {
+		t.Error("Expected User's order")
+	}
+
+	if mo.Status != db.OrderStatus(o.OrderStatus) {
+		t.Errorf("Expected status to be %s, got %v", o.OrderStatus, mo.Status)
+	}
+
+	floatVal, _ := mo.TotalAmount.Float64Value()
+
+	if floatVal.Float64 != o.TotalAmount {
+		t.Errorf("Expected total amount to be %f, got %f", o.TotalAmount, floatVal.Float64)
+	}
+
+	mItems, err := p.queries.ListOrderItems(ctx, mo.ID)
+
+	if err != nil {
+		t.Error("Expected to return Order Items")
+	}
+
+	if len(mItems) != 1 {
+		t.Error("Expected the Order to have one Order Item")
+	}
+
+	it := mItems[0]
+
+	if it.OrderID != mo.ID {
+		t.Errorf("Expected ID to be %v, got %v", mo.ID, it.OrderID)
+	}
+
 }

@@ -33,3 +33,16 @@ INSERT INTO order_items (
  $1, $2, $3, $4, $5
 )
 RETURNING *;
+
+
+-- name: DeleteOrderItems :many
+DELETE FROM order_items RETURNING *;
+
+-- name: DeleteOrders :many
+DELETE FROM orders RETURNING *;
+
+
+-- name: ListOrderItems :many
+SELECT * FROM order_items
+WHERE order_id = $1
+ORDER BY updated_at;

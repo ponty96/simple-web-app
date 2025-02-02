@@ -55,6 +55,17 @@ func (ns NullOrderStatus) Value() (driver.Value, error) {
 	return string(ns.OrderStatus), nil
 }
 
+func (e OrderStatus) Valid() bool {
+	switch e {
+	case OrderStatusPending,
+		OrderStatusShipped,
+		OrderStatusDelivered,
+		OrderStatusCancelled:
+		return true
+	}
+	return false
+}
+
 type Address struct {
 	ID         pgtype.UUID
 	Line1      string

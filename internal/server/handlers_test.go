@@ -4,25 +4,40 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"log"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
 
-	"github.com/ponty96/simple-web-app/internal/orders"
+	"github.com/pkg/errors"
+	"github.com/ponty96/my-proto-schemas/output/schemas"
+	"google.golang.org/protobuf/proto"
 )
 
-// ---- processor.Processor Mock for Testing --- //
-type ProcessorMock struct {
-	newOrder *orders.Order
+// ---- rabbitmq.MQ Mock for Testing --- //
+type MQMock struct {
+	PublishedEvent []byte
+	Closed         string
 }
 
-func (c *ProcessorMock) NewOrder(ctx context.Context, order *orders.Order) error {
-	c.newOrder = order
+func (m *MQMock) Close() error {
+	m.Closed = "closed"
 	return nil
 }
 
-// --- End of processor.Processor Mock ---- //
+func (m *MQMock) Publish(ctx context.Context, o proto.Message) error {
+	b, err := proto.Marshal(o)
+
+	if err != nil {
+		log.Panicf("failed to encode %s", err)
+		return errors.Wrap(err, "failed to encode order proto")
+	}
+	m.PublishedEvent = b
+	return nil
+}
+
+// --- End of rabbitmq.MQ Mock ---- //
 
 func Test_OrderWebhookBadRequest(t *testing.T) {
 	cfg := &Config{
@@ -37,7 +52,7 @@ func Test_OrderWebhookBadRequest(t *testing.T) {
 		  id: dddd
 		}
 	`
-	req := httptest.NewRequest("POST", "/", strings.NewReader(payload))
+	req := httptest.NewRequest("POST", "/webhooks/orders", strings.NewReader(payload))
 	w := httptest.NewRecorder()
 
 	s.orderWebhookHandler(w, req)
@@ -77,7 +92,7 @@ func Test_OrderWebhookRequiredFields(t *testing.T) {
 			// Setup and make request
 			cfg := &Config{Host: "localhost", Port: 4050}
 			s := NewHTTP(cfg)
-			req := httptest.NewRequest("POST", "/", bytes.NewReader(jsonPayload))
+			req := httptest.NewRequest("POST", "/webhooks/orders", bytes.NewReader(jsonPayload))
 			w := httptest.NewRecorder()
 
 			s.orderWebhookHandler(w, req)
@@ -104,11 +119,11 @@ func Test_OrderWebhookRequiredFields(t *testing.T) {
 }
 
 func Test_OrderWebhookSuccessRequest(t *testing.T) {
-	p := &ProcessorMock{}
+	mq := &MQMock{}
 	cfg := &Config{
-		Host:      "localhost",
-		Port:      4050,
-		Processor: p,
+		Host: "localhost",
+		Port: 4050,
+		MQ:   mq,
 	}
 
 	s := NewHTTP(cfg)
@@ -151,7 +166,7 @@ func Test_OrderWebhookSuccessRequest(t *testing.T) {
         }
     }`
 
-	req := httptest.NewRequest("POST", "/", strings.NewReader(payload))
+	req := httptest.NewRequest("POST", "/webhooks/orders", strings.NewReader(payload))
 	w := httptest.NewRecorder()
 
 	s.orderWebhookHandler(w, req)
@@ -171,7 +186,13 @@ func Test_OrderWebhookSuccessRequest(t *testing.T) {
 		t.Errorf("Expected %d, got %d", http.StatusCreated, r.Code)
 	}
 
-	if *p.newOrder.OrderID != "test-123" {
-		t.Error("failed to call processor")
+	orderEvent := &schemas.Order{}
+
+	if mq.PublishedEvent == nil {
+		t.Error("Failed to Publish New Order")
+	}
+
+	if err := proto.Unmarshal(mq.PublishedEvent, orderEvent); err != nil {
+		t.Errorf("failed to decode %s", err)
 	}
 }

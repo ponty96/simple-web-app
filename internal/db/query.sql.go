@@ -134,6 +134,72 @@ func (q *Queries) CreateOrderItem(ctx context.Context, arg *CreateOrderItemParam
 	return &i, err
 }
 
+const deleteOrderItems = `-- name: DeleteOrderItems :many
+DELETE FROM order_items RETURNING id, order_id, product_id, quantity, price, total_price, created_at, updated_at
+`
+
+func (q *Queries) DeleteOrderItems(ctx context.Context) ([]*OrderItem, error) {
+	rows, err := q.db.Query(ctx, deleteOrderItems)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []*OrderItem{}
+	for rows.Next() {
+		var i OrderItem
+		if err := rows.Scan(
+			&i.ID,
+			&i.OrderID,
+			&i.ProductID,
+			&i.Quantity,
+			&i.Price,
+			&i.TotalPrice,
+			&i.CreatedAt,
+			&i.UpdatedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, &i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const deleteOrders = `-- name: DeleteOrders :many
+DELETE FROM orders RETURNING id, user_id, shipping_address_id, billing_address_id, total_amount, status, created_at, updated_at
+`
+
+func (q *Queries) DeleteOrders(ctx context.Context) ([]*Order, error) {
+	rows, err := q.db.Query(ctx, deleteOrders)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []*Order{}
+	for rows.Next() {
+		var i Order
+		if err := rows.Scan(
+			&i.ID,
+			&i.UserID,
+			&i.ShippingAddressID,
+			&i.BillingAddressID,
+			&i.TotalAmount,
+			&i.Status,
+			&i.CreatedAt,
+			&i.UpdatedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, &i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const getOrder = `-- name: GetOrder :one
 SELECT id, user_id, shipping_address_id, billing_address_id, total_amount, status, created_at, updated_at FROM orders
 WHERE id = $1 LIMIT 1
@@ -153,6 +219,41 @@ func (q *Queries) GetOrder(ctx context.Context, id pgtype.UUID) (*Order, error) 
 		&i.UpdatedAt,
 	)
 	return &i, err
+}
+
+const listOrderItems = `-- name: ListOrderItems :many
+SELECT id, order_id, product_id, quantity, price, total_price, created_at, updated_at FROM order_items
+WHERE order_id = $1
+ORDER BY updated_at
+`
+
+func (q *Queries) ListOrderItems(ctx context.Context, orderID pgtype.UUID) ([]*OrderItem, error) {
+	rows, err := q.db.Query(ctx, listOrderItems, orderID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []*OrderItem{}
+	for rows.Next() {
+		var i OrderItem
+		if err := rows.Scan(
+			&i.ID,
+			&i.OrderID,
+			&i.ProductID,
+			&i.Quantity,
+			&i.Price,
+			&i.TotalPrice,
+			&i.CreatedAt,
+			&i.UpdatedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, &i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
 }
 
 const listOrders = `-- name: ListOrders :many
