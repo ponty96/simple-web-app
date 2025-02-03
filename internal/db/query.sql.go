@@ -200,6 +200,28 @@ func (q *Queries) DeleteOrders(ctx context.Context) ([]*Order, error) {
 	return items, nil
 }
 
+const getAddress = `-- name: GetAddress :one
+SELECT id, line1, line2, city, state, postal_code, country, created_at, updated_at FROM addresses
+WHERE id = $1 LIMIT 1
+`
+
+func (q *Queries) GetAddress(ctx context.Context, id pgtype.UUID) (*Address, error) {
+	row := q.db.QueryRow(ctx, getAddress, id)
+	var i Address
+	err := row.Scan(
+		&i.ID,
+		&i.Line1,
+		&i.Line2,
+		&i.City,
+		&i.State,
+		&i.PostalCode,
+		&i.Country,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+	)
+	return &i, err
+}
+
 const getOrder = `-- name: GetOrder :one
 SELECT id, user_id, shipping_address_id, billing_address_id, total_amount, status, created_at, updated_at FROM orders
 WHERE id = $1 LIMIT 1

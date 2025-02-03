@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"time"
 
+	"github.com/gorilla/mux"
 	log "github.com/sirupsen/logrus"
 
 	"github.com/pkg/errors"
@@ -117,4 +118,38 @@ func (s *server) orderWebhookHandler(w http.ResponseWriter, r *http.Request) {
 			Code:    http.StatusCreated,
 		})
 	}
+}
+
+// func (s *server) getOrder(w http.ResponseWriter, r *http.Request) {
+// 	// read the request payload which should be a json
+// 	// validate required fields
+// 	ctx, cancel := context.WithTimeout(r.Context(), 8*time.Second) // maximum timeout of the webhook provider to wait for a response
+// 	defer cancel()
+
+// }
+
+func (s *server) listUserOrders(w http.ResponseWriter, r *http.Request) {
+	ctx, cancel := context.WithTimeout(r.Context(), 10*time.Second) // maximum timeout of the webhook provider to wait for a response
+	defer cancel()
+
+	vars := mux.Vars(r)
+
+	id := vars["user_id"]
+
+	orders, err := s.Config.Processor.ListUserOrders(ctx, id)
+
+	if err != nil {
+		log.Errorf("Failed to fetch user orders %v", err)
+		httpWriteJSON(w, Response{
+			Message: "could not perform action",
+			Code:    http.StatusInternalServerError,
+		})
+	} else {
+		httpWriteJSON(w, Response{
+			Message: "List User Orders",
+			Code:    http.StatusOK,
+			Data:    orders,
+		})
+	}
+
 }

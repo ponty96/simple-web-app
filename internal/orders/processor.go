@@ -18,6 +18,7 @@ import (
 
 type Processor interface {
 	NewOrder(context.Context, proto.Message) error
+	ListUserOrders(context.Context, string) ([]Order, error)
 }
 
 type processor struct {
@@ -62,7 +63,7 @@ type Address struct {
 	Country    string `json:"country"`
 }
 
-func (c *processor) NewOrder(ctx context.Context, msg proto.Message) error {
+func (p *processor) NewOrder(ctx context.Context, msg proto.Message) error {
 	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()
 
@@ -76,7 +77,7 @@ func (c *processor) NewOrder(ctx context.Context, msg proto.Message) error {
 	var billingAddressID pgtype.UUID = pgtype.UUID{Valid: false}
 
 	if o.ShippingAddress != nil && o.ShippingAddress.Street != "" {
-		sAdd, err := c.queries.CreateAddress(ctx, &db.CreateAddressParams{
+		sAdd, err := p.queries.CreateAddress(ctx, &db.CreateAddressParams{
 			Line1:   o.ShippingAddress.Street,
 			State:   o.ShippingAddress.State,
 			City:    o.ShippingAddress.City,
@@ -90,7 +91,7 @@ func (c *processor) NewOrder(ctx context.Context, msg proto.Message) error {
 	}
 
 	if o.BillingAddress != nil && o.BillingAddress.Street != "" {
-		bAdd, err := c.queries.CreateAddress(ctx, &db.CreateAddressParams{
+		bAdd, err := p.queries.CreateAddress(ctx, &db.CreateAddressParams{
 			Line1:   o.BillingAddress.Street,
 			State:   o.BillingAddress.State,
 			City:    o.BillingAddress.City,
@@ -112,7 +113,7 @@ func (c *processor) NewOrder(ctx context.Context, msg proto.Message) error {
 		return errors.Wrap(err, "failed to convert total amount to numeric")
 	}
 
-	insertedOrder, err := c.queries.CreateOrder(ctx, &db.CreateOrderParams{
+	insertedOrder, err := p.queries.CreateOrder(ctx, &db.CreateOrderParams{
 		ShippingAddressID: shippingAddressID,
 		BillingAddressID:  billingAddressID,
 		UserID:            userUUID,
@@ -125,8 +126,8 @@ func (c *processor) NewOrder(ctx context.Context, msg proto.Message) error {
 	}
 
 	for _, item := range o.GetItems() {
-		var p pgtype.Numeric
-		if err := p.Scan(fmt.Sprintf("%.2f", item.Price)); err != nil {
+		var price pgtype.Numeric
+		if err := price.Scan(fmt.Sprintf("%.2f", item.Price)); err != nil {
 			return errors.Wrap(err, "failed to convert price to numeric")
 		}
 
@@ -140,9 +141,9 @@ func (c *processor) NewOrder(ctx context.Context, msg proto.Message) error {
 			return errors.Wrap(err, "failed to parse UUID")
 		}
 
-		_, err := c.queries.CreateOrderItem(ctx, &db.CreateOrderItemParams{
+		_, err := p.queries.CreateOrderItem(ctx, &db.CreateOrderItemParams{
 			OrderID:    insertedOrder.ID,
-			Price:      p,
+			Price:      price,
 			Quantity:   item.Quantity,
 			TotalPrice: tP,
 			ProductID:  productUUID,
@@ -156,4 +157,77 @@ func (c *processor) NewOrder(ctx context.Context, msg proto.Message) error {
 	log.Print("Successfully created an order")
 
 	return nil
+}
+
+func (p *processor) ListUserOrders(ctx context.Context, ID string) ([]Order, error) {
+	var userID pgtype.UUID
+
+	if err := userID.Scan(ID); err != nil {
+		return nil, errors.Wrap(err, "failed to parse UUID")
+	}
+
+	orders, err := p.queries.ListOrders(ctx, userID)
+
+	if err != nil {
+		return nil, errors.Wrap(err, "failed to fetch orders")
+	}
+
+	var os []Order
+
+	for _, o := range orders {
+		shippingAddress, err := p.queries.GetAddress(ctx, o.ShippingAddressID)
+		if err != nil {
+			return nil, errors.Wrap(err, fmt.Sprintf("failed to fetch shipping address for %v", o.ID))
+		}
+
+		billingAddress, err := p.queries.GetAddress(ctx, o.BillingAddressID)
+		if err != nil {
+			return nil, errors.Wrap(err, fmt.Sprintf("failed to fetch billing address for %v", o.ID))
+		}
+
+		items, err := p.queries.ListOrderItems(ctx, o.ID)
+		if err != nil {
+			return nil, errors.Wrap(err, fmt.Sprintf("failed to fetch orders items for %v", o.ID))
+		}
+
+		var orderItems []OrderItem
+
+		for _, item := range items {
+			itemPrice, _ := item.Price.Float64Value()
+			itemTotalPrice, _ := item.TotalPrice.Float64Value()
+
+			orderItems = append(orderItems, OrderItem{
+				ProductID:  item.ProductID.String(),
+				Price:      itemPrice.Float64,
+				TotalPrice: itemTotalPrice.Float64,
+				Quantity:   item.Quantity,
+			})
+		}
+
+		id := o.ID.String()
+		userId := o.UserID.String()
+		tA, _ := o.TotalAmount.Float64Value()
+
+		os = append(os, Order{
+			OrderID:     &id,
+			TotalAmount: &tA.Float64,
+			Status:      (*string)(&o.Status),
+			UserID:      &userId,
+			ShippingAddress: Address{
+				Line1:   shippingAddress.Line1,
+				City:    shippingAddress.City,
+				State:   shippingAddress.State,
+				Country: shippingAddress.Country,
+			},
+			BillingAddress: Address{
+				Line1:   billingAddress.Line1,
+				City:    billingAddress.City,
+				State:   billingAddress.State,
+				Country: billingAddress.Country,
+			},
+			Items: orderItems,
+		})
+	}
+
+	return os, nil
 }

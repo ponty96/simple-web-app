@@ -46,3 +46,8 @@ DELETE FROM orders RETURNING *;
 SELECT * FROM order_items
 WHERE order_id = $1
 ORDER BY updated_at;
+
+
+-- name: GetAddress :one
+SELECT * FROM addresses
+WHERE id = $1 LIMIT 1;

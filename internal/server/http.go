@@ -6,20 +6,23 @@ import (
 	"net/http"
 
 	"github.com/gorilla/mux"
+	"github.com/ponty96/simple-web-app/internal/orders"
 	"github.com/ponty96/simple-web-app/internal/rabbitmq"
 	log "github.com/sirupsen/logrus"
 )
 
 type Config struct {
-	Host string
-	Port int
-	MQ   rabbitmq.MQ
+	Host      string
+	Port      int
+	MQ        rabbitmq.MQ
+	Processor orders.Processor
 }
 
 type Response struct {
 	Message string            `json:"message"`
 	Code    int               `json:"status_code"`
 	Errs    map[string]string `json:"errs"`
+	Data    []orders.Order    `json:"data"`
 }
 
 type server struct {
@@ -38,6 +41,7 @@ func (s *server) Serve() {
 	// r.HandleFunc("/publish-event", s.publishEventHandler).Methods("POST")
 
 	r.HandleFunc("/webhooks/orders", s.orderWebhookHandler).Methods("POST")
+	r.HandleFunc("/orders/{user_id}", s.listUserOrders).Methods("GET")
 	r.HandleFunc("/health-check", s.healthCheckHandler).Methods("GET")
 	http.ListenAndServe(fmt.Sprintf("%s:%d", s.Config.Host, s.Config.Port), r)
 }

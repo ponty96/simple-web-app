@@ -59,9 +59,10 @@ func main() {
 	r.Consume(ctx, &schemas.Order{}, p.NewOrder)
 
 	sCfg := server.Config{
-		Host: config.ListenHost,
-		Port: config.ListenPort,
-		MQ:   r,
+		Host:      config.ListenHost,
+		Port:      config.ListenPort,
+		MQ:        r,
+		Processor: p,
 	}
 	s := server.NewHTTP(&sCfg)
 	s.Serve()
